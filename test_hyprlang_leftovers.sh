@@ -204,6 +204,32 @@ run_migration
 ln -s "$work_dir/monitors-b.conf" "$config_home/hypr/monitors.conf"
 recreated_case kept "a recreated symlink with a different target"
 
+# Targets that differ only by a trailing newline are different targets: a
+# plain $(readlink) would strip it and remove a link that isn't backed up.
+seed
+rm -f "$config_home/hypr/monitors.conf"
+ln -s "$work_dir/monitors-nl.conf" "$config_home/hypr/monitors.conf"
+run_migration
+ln -s "$work_dir/monitors-nl.conf"$'\n' "$config_home/hypr/monitors.conf"
+recreated_case kept "a recreated symlink whose target has an extra trailing newline"
+# readlink prints the target plus its own newline; the x keeps both.
+[ "$(readlink "$backed_up" && printf x)" = "$work_dir/monitors-nl.conf"$'\n'x ] ||
+    fail "the backed-up link was changed while comparing trailing newlines"
+
+seed
+rm -f "$config_home/hypr/monitors.conf"
+ln -s "$work_dir/monitors-nl.conf"$'\n' "$config_home/hypr/monitors.conf"
+run_migration
+ln -s "$work_dir/monitors-nl.conf" "$config_home/hypr/monitors.conf"
+recreated_case kept "a recreated symlink missing the backup target's trailing newline"
+
+seed
+rm -f "$config_home/hypr/monitors.conf"
+ln -s "$work_dir/monitors-nl.conf"$'\n' "$config_home/hypr/monitors.conf"
+run_migration
+ln -s "$work_dir/monitors-nl.conf"$'\n' "$config_home/hypr/monitors.conf"
+recreated_case removed "a recreated symlink with the same target, trailing newline included"
+
 seed_recreated
 : >"$work_dir/empty-target.conf"
 ln -s "$work_dir/empty-target.conf" "$config_home/hypr/monitors.conf"
