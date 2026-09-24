@@ -71,10 +71,26 @@ expect "WhiteSur-Dark" "$(ui_field 'garbage {{{ not a config' gtk_theme "$theme"
     "a malformed state file keeps the theme's value"
 expect "Wallbash-Gtk" "$(ui_field '$GTK_THEME = Wallbash-Gtk' gtk_theme '')" \
     "an override applies to a theme that defines nothing"
-expect 'My "Quoted" Theme' "$(ui_field '$GTK_THEME = My \"Quoted\" Theme' gtk_theme "$theme" | sed 's/\\"/"/g')" \
+expect 'My "Quoted" Theme' "$(ui_field '$GTK_THEME = My "Quoted" Theme' gtk_theme "$theme" | sed 's/\\"/"/g')" \
     "an override containing quotes is written as a valid Lua string"
 expect "Second" "$(ui_field '$GTK_THEME = First
 $GTK_THEME = Second' gtk_theme "$theme")" \
     "a repeated override resolves like theme.switch.sh (last one wins)"
+
+# Values are data, never shell code: hyq does not escape $(...), backticks or
+# quotes, so an eval of its output ran them (CWE-78). Covers a downloaded
+# theme's hypr.theme and the config.toml override alike.
+marker="$work_dir/injected"
+payload='a$(touch '"$marker"')b`touch '"$marker"'`c"; touch '"$marker"'; "'
+rm -f "$marker"
+got=$(ui_field "\$GTK_THEME = $payload" gtk_theme "$theme")
+[ -e "$marker" ] && fail "a command in a state file value was executed"
+expect "a\$(touch $marker)b\`touch $marker\`c\\\"; touch $marker; \\\"" "$got" \
+    "a state file value with shell syntax is kept literally"
+rm -f "$marker"
+got=$(ui_field - gtk_theme "\$GTK_THEME = $payload")
+[ -e "$marker" ] && fail "a command in a theme file value was executed"
+expect "a\$(touch $marker)b\`touch $marker\`c\\\"; touch $marker; \\\"" "$got" \
+    "a theme file value with shell syntax is kept literally"
 
 finish
