@@ -86,4 +86,13 @@ got=$(resolved - "\$GTK_THEME = $payload" GTK_THEME)
 expect "a\$(touch $marker)b\`touch $marker\`c\"; touch $marker; \"" "$got" \
     "a state value with shell syntax is kept literally"
 
+# Sizes are spliced into sed commands and config files, so only plain integers
+# may pass; a value with a newline or shell/sed syntax counts as not set.
+for bad in '1, os.execute("x")' '-5' '2.5' 'abc' '12 13' '1/e touch x'; do
+    expect "" "$(resolved "\$CURSOR_SIZE = $bad" - CURSOR_SIZE)" \
+        "a non-integer size '$bad' is treated as not set"
+done
+expect "20" "$(resolved '$CURSOR_SIZE = 20' '$CURSOR_SIZE = 9x' CURSOR_SIZE)" \
+    "an invalid state size keeps the theme's size"
+
 finish
