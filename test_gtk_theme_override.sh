@@ -98,4 +98,13 @@ got=$(ui_field - gtk_theme "\$GTK_THEME = $payload")
 expect "a\$(touch $marker)b\`touch $marker\`c\\\"; touch $marker; \\\"" "$got" \
     "a theme file value with shell syntax is kept literally"
 
+# Sizes are written unquoted into the Lua state, so only plain integers may
+# pass; anything else would end up in ui.lua as code.
+for bad in '1, os.execute("x")' '-5' '2.5' 'abc' '12 13'; do
+    expect "20" "$(ui_field "\$CURSOR_SIZE = $bad" cursor_size '$CURSOR_SIZE = 20')" \
+        "a non-integer size override '$bad' keeps the theme's size"
+done
+expect "nil" "$(ui_field - cursor_size '$CURSOR_SIZE = 1, os.execute("x")')" \
+    "a non-integer theme size is dropped"
+
 finish
