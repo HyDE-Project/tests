@@ -47,7 +47,8 @@ ui_field() {
         XDG_STATE_HOME="$home/.local/state" PATH="/usr/bin:/bin" \
         HYDE_SHELL_INIT=1 HYDE_THEME=T \
         bash -c ". '$global_control' >/dev/null 2>&1; . '$color_hypr'" >/dev/null 2>&1
-    sed -n "s/^ *$2 = \"\(.*\)\",\$/\1/p" "$home/.local/state/hyde/lua_state/ui.lua"
+    sed -n "s/^ *$2 = \(.*\),\$/\1/p" "$home/.local/state/hyde/lua_state/ui.lua" |
+        sed 's/^"\(.*\)"$/\1/'
 }
 
 expect() {
@@ -61,6 +62,10 @@ expect "WhiteSur-Dark" "$(ui_field - gtk_theme "$theme")" \
     "no state file keeps the theme's GTK theme"
 expect "Wallbash-Gtk" "$(ui_field '$GTK_THEME = Wallbash-Gtk' gtk_theme "$theme")" \
     "the state override wins over the theme"
+expect "30" "$(ui_field '$CURSOR_SIZE = 30' cursor_size "$theme")" \
+    "an integer override reaches the ui state"
+expect "24" "$(ui_field - cursor_size '$CURSOR_SIZE = 24')" \
+    "an integer theme value reaches the ui state"
 expect "Tela" "$(ui_field '$GTK_THEME = Wallbash-Gtk' icon_theme "$theme")" \
     "a variable the state does not define keeps the theme's value"
 expect "WhiteSur-Dark" "$(ui_field '$GTK_THEME =' gtk_theme "$theme")" \
