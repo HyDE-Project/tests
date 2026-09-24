@@ -9,7 +9,8 @@
 #
 # This covers: fresh/missing state, toggle on/off, a dead inhibitor pid, a
 # pid reused by an unrelated process, several shapes of a corrupted state
-# file, a missing systemd-inhibit binary, invalid --sigproc input, and a
+# file, a missing or immediately-exiting systemd-inhibit binary, a Waybar
+# reload killing the toggling process group, invalid --sigproc input, and a
 # concurrent double-toggle race -- not just the on/off happy path.
 
 . "$(dirname -- "$0")/lib/common.sh"
@@ -125,6 +126,51 @@ if [ -n "$pid" ]; then
     sleep 0.2
     kill -0 "$pid" 2>/dev/null && fail "toggling off did not actually stop the inhibitor process"
 fi
+
+# --- Waybar hot-reload: Waybar runs on-click commands as their own process
+# group and killpg()s those groups when a SIGUSR2 reload (layout switch,
+# theme change) destroys its modules. The inhibitor must not live in that
+# group, or every reload silently turns Caffeine mode off. The toggle runs
+# under setsid here to get its own group, like Waybar's forkExec does. ---
+fresh_home waybar-reload
+setsid bash -c "$(declare -f run); $(declare -p full_path home_dir script); run -tq" \
+    >"$work_dir/reload.out" 2>/dev/null &
+toggle_pid=$!
+wait "$toggle_pid"
+pid=$(state_pid)
+[ -n "$pid" ] || fail "toggling on under its own process group recorded no pid"
+if [ -n "$pid" ]; then
+    [ "$(ps -p "$pid" -o pgid= | tr -d ' ')" != "$toggle_pid" ] ||
+        fail "the inhibitor shares the toggling command's process group"
+    kill -TERM -- "-$toggle_pid" 2>/dev/null # what waybar does on reload
+    sleep 0.2
+    kill -0 "$pid" 2>/dev/null || fail "killing the toggle's process group (a waybar reload) killed the inhibitor"
+    out=$(run -rq 2>/dev/null)
+    case "$out" in
+    *'"alt":"activated"'*) ;;
+    *) fail "after a waybar reload caffeine no longer reports activated: $out" ;;
+    esac
+    kill "$pid" 2>/dev/null
+fi
+
+# --- an inhibitor that dies right away (e.g. logind refused it) must not stay
+# recorded as on: the --read waybar runs right after a toggle self-heals it ---
+fresh_home inhibitor-dies
+mkdir -p "$real_path-dying"
+for f in "$real_path"/*; do
+    ln -s "$f" "$real_path-dying/$(basename "$f")" 2>/dev/null
+done
+rm "$real_path-dying/systemd-inhibit"
+printf '#!/bin/sh\nexit 1\n' >"$real_path-dying/systemd-inhibit"
+chmod +x "$real_path-dying/systemd-inhibit"
+CAFFEINE_TEST_PATH="$real_path-dying:$hyde_bin" run -tq >/dev/null 2>&1
+sleep 0.2
+out=$(run -rq 2>/dev/null)
+case "$out" in
+*'"alt":"deactivated"'*) ;;
+*) fail "an inhibitor that exited immediately still reads as activated: $out" ;;
+esac
+[ "$(state_pid)" = "" ] || fail "an inhibitor that exited immediately still left a pid recorded"
 
 # --- a stale/dead pid in the state file self-heals to off ---
 fresh_home stale-dead
