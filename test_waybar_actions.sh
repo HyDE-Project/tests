@@ -16,6 +16,9 @@
 #   ignores it (custom/cliphist "Manage Favorites" opened the main menu)
 # - wallpaper changes without --global, which skip the theme cache and
 #   wallbash colours that the keybinds and the HyDE menu apply
+# - global wallpaper and theme changes run straight from Waybar: they end in a
+#   reload that signals Waybar's whole cgroup and kills them midway (#2024),
+#   so they have to go through `hyde-shell app -t scope --`
 #
 # The checker runs against fixture trees first -- a passing case and one per
 # rule, plus malformed input -- so it can't pass by skipping what it can't read.
@@ -87,10 +90,14 @@ def check_command(where, cmd):
         if len(words) < 2 or words[0] != "hyde-shell":
             continue
         args = words[1:]
+        scoped = False
         if args[0] == "app":
             if "--" not in args:
                 problems.append(f"{where}: `hyde-shell app` without `--`: {cmd}")
                 continue
+            pre = args[1:args.index("--")]
+            scoped = any(pre[i] == "-t" and i + 1 < len(pre) and pre[i + 1] in ("scope", "service")
+                         for i in range(len(pre)))
             args = args[args.index("--") + 1:]
             if not args:
                 problems.append(f"{where}: `hyde-shell app --` with no command: {cmd}")
@@ -103,9 +110,19 @@ def check_command(where, cmd):
             problems.append(f"{where}: hyde-shell {name}: no such script")
             continue
         base = os.path.basename(script)
-        if base.startswith("wallpaper.") and rest and \
-                not any(a == "--global" or re.fullmatch(r"-[A-Za-z]*G[A-Za-z]*", a) for a in rest):
+        is_global = any(a == "--global" or re.fullmatch(r"-[A-Za-z]*G[A-Za-z]*", a) for a in rest)
+        read_only = any(a in ("-g", "--get", "-j", "--json", "-h", "--help") for a in rest)
+        if base.startswith("wallpaper.") and rest and not is_global and not read_only:
             problems.append(f"{where}: wallpaper change without --global: {cmd}")
+        # A global wallpaper or theme change rewrites the colours, and HyDE's
+        # reload hook then sends SIGUSR2 to every process in Waybar's cgroup
+        # (systemctl kill on the unit), killing the change midway unless it
+        # runs in its own unit (#2024).
+        changes_theme = base in ("theme.switch.sh", "theme.select.sh") or \
+            (base.startswith("wallpaper.") and is_global)
+        if changes_theme and not scoped:
+            problems.append(f"{where}: {base} runs inside Waybar's cgroup; "
+                            f"start it through `hyde-shell app -t scope --`: {cmd}")
         try:
             uses_argparse = "shutils/argparse.sh" in open(script, encoding="utf-8").read()
         except UnicodeDecodeError:
@@ -179,6 +196,9 @@ fixture() {
     printf '#!/bin/sh\n' >"$fx_lib/plain.sh"
     printf '#!/bin/sh\n. "${LIB_DIR}/hyde/shutils/argparse.sh"\n' >"$fx_lib/parsed.sh"
     printf '#!/bin/sh\n' >"$fx_lib/wallpaper.sh"
+    printf '#!/bin/sh\n' >"$fx_lib/theme.switch.sh"
+    printf '#!/bin/sh\n' >"$fx_lib/theme.select.sh"
+    chmod +x "$fx_lib/wallpaper.sh" "$fx_lib/theme.switch.sh" "$fx_lib/theme.select.sh"
     printf '#!/bin/sh\n' >"$fx_lib/tool.sh"
     chmod +x "$fx_lib/tool.sh"
     return 0
@@ -218,7 +238,8 @@ menu_xml='<interface><object class="GtkMenu" id="menu">
 fixture '{ "custom/test": { // a comment
   "exec-if": "hyde-shell plain --x >/dev/null 2>&1",
   "on-click": "hyde-shell app -t scope -- tool.sh --y",
-  "on-click-right": "hyde-shell wallpaper -Gn",
+  "on-click-right": "hyde-shell app -t scope -- wallpaper.sh -Gn",
+  "on-click-middle": "hyde-shell wallpaper --get",
   "on-scroll-up": "hyde-shell parsed --flag; pkill -RTMIN+1 waybar",
   "menu-file": "$XDG_DATA_HOME/waybar/menus/test.xml",
   "menu-actions": { "go-previous": "xdg-open https://example.org", },
@@ -262,6 +283,18 @@ cmd_fixture '"hyde-shell wallpaper -n"'
 expect_problem "a wallpaper change without --global" "without --global"
 cmd_fixture '"sleep 0.1 && hyde-shell wallpaper --select"'
 expect_problem "a chained wallpaper change without --global" "without --global"
+cmd_fixture '"hyde-shell wallpaper --global -n"'
+expect_problem "a global wallpaper change run directly from Waybar" "runs inside Waybar's cgroup"
+cmd_fixture '"hyde-shell app -- wallpaper.sh --global -n"'
+expect_problem "a global wallpaper change through app without a unit type" "runs inside Waybar's cgroup"
+cmd_fixture '"hyde-shell app -t scope -- theme.switch.sh -n; pkill -RTMIN+19 waybar"'
+expect_ok "a scoped theme switch followed by a Waybar refresh"
+cmd_fixture '"hyde-shell app -t service -- theme.select.sh"'
+expect_ok "a theme selection in its own service"
+cmd_fixture '"sleep 0.1 && hyde-shell theme.select.sh"'
+expect_problem "a theme selection run directly from Waybar" "theme.select.sh runs inside Waybar's cgroup"
+cmd_fixture '"hyde-shell wallpaper --json"'
+expect_ok "a read-only wallpaper query"
 
 # --- the shipped modules, layouts and menus ---
 out=$(check "$REPO_ROOT") || fail "broken Waybar actions:

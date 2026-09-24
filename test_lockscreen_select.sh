@@ -7,7 +7,8 @@
 # otherwise -- it must never start a lock.
 #
 # Covers: hyprlock (wrapper with a selector), a lockscreen without a wrapper,
-# a wrapper without a selector, the short flag, an empty/unset override
+# a wrapper without a selector, one that mentions --select only in a comment,
+# one declaring a flag that merely starts with --select, the short flag, an empty/unset override
 # falling back to hyprlock, a lockscreen command with arguments, --get and
 # --select together, extra arguments after --select, and that a plain call
 # and an unknown flag still launch the lockscreen as before.
@@ -33,8 +34,15 @@ stub() {
 }
 stub app.sh
 stub notify-send
-stub hyprlock.sh '# argparse "--select,-S" "" "Selects the hyprlock layout"'
+# A wrapper offers a selector by declaring --select through argparse.sh, as
+# hyprlock.sh does. The declarations sit after `exit 0`: lockscreen.sh only
+# reads them, the stubs never run them.
+stub hyprlock.sh 'exit 0
+argparse "--select,-S" "" "Selects the hyprlock layout"'
 stub swaylock.sh '# a wrapper with no layout selector'
+stub commentlock.sh '# --select unsupported, arguments are ignored'
+stub selectionlock.sh 'exit 0
+argparse "--selection" "" "not the selector"'
 
 # $1.. = lockscreen.sh arguments; LOCK_ENV holds one extra env assignment
 # (kept as a single word, so a value with spaces stays intact).
@@ -85,6 +93,17 @@ status=$?
 [ "$status" -ne 0 ] || fail "--select with a selector-less wrapper exited 0"
 grep -q '^swaylock.sh' "$log" && fail "--select started a wrapper that has no selector: $(cat "$log")"
 never_locked "--select with a selector-less wrapper"
+
+# --- a wrapper that only mentions --select (a comment) or declares a flag that
+# merely starts with it is not a selector: never started ---
+for name in commentlock selectionlock; do
+    out=$(LOCK_ENV="HYDE_LOCKSCREEN=$name" run --select)
+    status=$?
+    [ "$status" -ne 0 ] || fail "--select with $name.sh exited 0"
+    grep -q "^$name.sh" "$log" && fail "--select started $name.sh, which declares no --select: $(cat "$log")"
+    case "$out" in *"no layout selector for lockscreen '$name'"*) ;; *) fail "--select with $name.sh gave no explanation: $out" ;; esac
+    never_locked "--select with $name.sh"
+done
 
 # --- a lockscreen command with arguments has no wrapper by that name ---
 out=$(LOCK_ENV="HYDE_LOCKSCREEN=swaylock -f" run --select)
