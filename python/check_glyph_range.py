@@ -1,11 +1,18 @@
 """Guard against glyphs the pinned Nerd Fonts release no longer carries.
 
-Nerd Fonts v3 moved the Material Design set from the private-use block at
-U+F500 to U+F0001 and left U+F534 to U+F8FF empty. A config that still names a
-codepoint in that block renders a replacement box on every fresh install, since
-the fonts the dots deploy are v3. The old block is not simply reassigned: what
-is left of it below U+F534 belongs to Octicons, which are still shipped, so the
-check names the empty span rather than the whole former block.
+Nerd Fonts v3 moved the Material Design set from U+F500-U+FD46 to U+F0001 and
+left U+F534 to U+FD46 empty. A config that still names a codepoint in that span
+renders wrong on every fresh install, since the fonts the dots deploy are v3.
+The old block is not simply reassigned: what is left of it below U+F534 belongs
+to Octicons, which are still shipped, so the check names the empty span rather
+than the whole former block.
+
+The old set ran past the private-use area into the CJK compatibility and
+presentation-form blocks (U+F900 onward). A glyph there does not render as a
+box but as an unrelated real character, e.g. the old volume-off icon U+FA80
+shows up as a CJK ideograph in the waybar mute state (HyDE-Project/HyDE#2132).
+Those blocks hold nothing a HyDE config otherwise needs, so the whole span is
+treated as dead.
 """
 
 from __future__ import annotations
@@ -16,10 +23,12 @@ import re
 import sys
 
 DEAD_FIRST = 0xF534
-DEAD_LAST = 0xF8FF
+DEAD_LAST = 0xFD46
 
 REPO_ROOT = pathlib.Path(os.environ.get("REPO_ROOT", "."))
-CONFIGS_DIR = REPO_ROOT / "Configs"
+# Configs is what gets deployed; Scripts carries the installer's own terminal
+# output, which is rendered in the same Nerd Font.
+SCAN_DIRS = (REPO_ROOT / "Configs", REPO_ROOT / "Scripts")
 
 ESCAPE = re.compile(r"\\u([0-9a-fA-F]{4})")
 
@@ -49,12 +58,15 @@ def offenders(text: str) -> list:
 
 def main() -> int:
     """Walk the shipped configuration and report every dead glyph in it."""
-    if not CONFIGS_DIR.is_dir():
-        print(f"no Configs directory under {REPO_ROOT}", file=sys.stderr)
+    missing = [d for d in SCAN_DIRS if not d.is_dir()]
+    if missing:
+        for directory in missing:
+            print(f"no {directory.name} directory under {REPO_ROOT}", file=sys.stderr)
         return 1
 
     failures = 0
-    for path in sorted(CONFIGS_DIR.rglob("*")):
+    paths = sorted(p for d in SCAN_DIRS for p in d.rglob("*"))
+    for path in paths:
         if not path.is_file() or path.is_symlink():
             continue
         try:
