@@ -139,4 +139,39 @@ else
     skip "python3 is not installed"
 fi
 
+# 11. Lua's staterc_set() goes through the helper. luautils needs lfs
+# (LuaFileSystem): HyDE's own lua_env, or a system package as on CI.
+lua_cpath=""
+lua_lib=$(find "$HOME/.local/state/hyde/lua_env/lib/lua" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | head -n 1)
+[ -n "$lua_lib" ] && lua_cpath="$lua_lib/?.so;;"
+if ! command -v lua >/dev/null 2>&1; then
+    skip "lua is not installed"
+elif ! LUA_CPATH="$lua_cpath" lua -e 'require("lfs")' >/dev/null 2>&1; then
+    skip "lfs (LuaFileSystem) is unavailable"
+else
+    run_lua() {
+        XDG_STATE_HOME="$state_home" LIB_DIR="$REPO_ROOT/Configs/.local/lib" \
+            LUA_CPATH="$lua_cpath" lua "$@"
+    }
+    reset_state
+    run_lua "$TESTS_DIR/lua/staterc_harness.lua" || fail "staterc_harness reported defects"
+
+    # Lua and bash writers at the same time lose nothing
+    reset_state "$seed"
+    lib="$REPO_ROOT/Configs/.local/lib/hyde/"
+    for i in $(seq 1 10); do
+        run_lua -e "package.path='$lib?.lua;$lib?/init.lua;'..package.path
+            require('luautils.global.state').staterc_set('L$i', 'v$i')" &
+        set_state "B$i" "v$i" &
+    done
+    wait
+    for i in 0 1 2 3 4 5 6 7; do
+        expect 1 "$(grep -c "^S$i=\"s$i\"\$" "$staterc")" "seed S$i after Lua and bash writers"
+    done
+    for i in $(seq 1 10); do
+        expect 1 "$(grep -c "^L$i=\"v$i\"\$" "$staterc")" "L$i after Lua and bash writers"
+        expect 1 "$(grep -c "^B$i=\"v$i\"\$" "$staterc")" "B$i after Lua and bash writers"
+    done
+fi
+
 finish
