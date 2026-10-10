@@ -128,12 +128,20 @@ def check_atomic_write() -> None:
     if stat.S_IMODE(target.stat().st_mode) != 0o640:
         fail(f"_atomic_write() changed the file mode to {oct(stat.S_IMODE(target.stat().st_mode))}")
 
-    fresh = adir / "includes.json"
-    wb._atomic_write(str(fresh), b'{"include": []}')
-    if fresh.read_bytes() != b'{"include": []}':
-        fail("_atomic_write() did not write bytes as-is")
-    if stat.S_IMODE(fresh.stat().st_mode) != 0o644:
-        fail(f"a new file is {oct(stat.S_IMODE(fresh.stat().st_mode))}, not 0644 (mkstemp's 0600 leaked)")
+    # A new file gets what open(..., "w") would give it: 0666 minus the umask,
+    # so neither mkstemp's 0600 nor a fixed world-readable mode.
+    for umask, want in ((0o022, 0o644), (0o077, 0o600), (0o002, 0o664)):
+        fresh = adir / f"includes-{umask:03o}.json"
+        old_umask = os.umask(umask)
+        try:
+            wb._atomic_write(str(fresh), b'{"include": []}')
+        finally:
+            os.umask(old_umask)
+        if fresh.read_bytes() != b'{"include": []}':
+            fail("_atomic_write() did not write bytes as-is")
+        got = stat.S_IMODE(fresh.stat().st_mode)
+        if got != want:
+            fail(f"a new file under umask {umask:03o} is {oct(got)}, expected {oct(want)}")
 
     # A symlinked config (dotfiles managers) stays a symlink; the file behind it changes.
     real = adir / "dotfiles" / "config.jsonc"
