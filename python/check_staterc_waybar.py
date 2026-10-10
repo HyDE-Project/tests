@@ -171,4 +171,41 @@ if wb.STATE_FILE.read_text() != "A=2\n":
     fail(f"value not written when staterc.lock could not be opened: {wb.STATE_FILE.read_text()!r}")
 lock_path.rmdir()
 
+# 8. only WAYBAR_LAYOUT_PATH present: the name and style are filled in from it
+reset("WAYBAR_LAYOUT_PATH=/x/a.jsonc\n")
+with mock.patch.object(wb, "get_current_layout_from_config",
+                       side_effect=AssertionError("not needed: the path is in staterc")), \
+     mock.patch.object(wb, "resolve_style_path", return_value="/x/a.css"):
+    try:
+        wb.ensure_state_file()
+    except AssertionError as exc:
+        fail(f"ensure_state_file() looked up the layout although staterc has it: {exc}")
+got = wb.STATE_FILE.read_text().splitlines()
+for want in ("WAYBAR_LAYOUT_PATH=/x/a.jsonc", "WAYBAR_LAYOUT_NAME=a", "WAYBAR_STYLE_PATH=/x/a.css"):
+    if got.count(want) != 1:
+        fail(f"only the path present: {want} not there exactly once in {got}")
+
+# 9. a layout another writer sets while ensure_state_file() works out its
+# values is kept: the missing keys are re-checked under the lock.
+reset('HYPR_SHADER="disable"\n')
+
+
+def stale_layout():
+    # Another waybar.py --set lands in between, then this lookup returns
+    # what it saw before.
+    wb.set_state_value("WAYBAR_LAYOUT_PATH", "/y/b.jsonc")
+    wb.set_state_value("WAYBAR_LAYOUT_NAME", "b")
+    wb.set_state_value("WAYBAR_STYLE_PATH", "/y/b.css")
+    return "/x/a.jsonc"
+
+
+with mock.patch.object(wb, "get_current_layout_from_config", side_effect=stale_layout), \
+     mock.patch.object(wb, "resolve_style_path", return_value="/x/a.css"):
+    wb.ensure_state_file()
+got = wb.STATE_FILE.read_text().splitlines()
+for want in ('HYPR_SHADER="disable"', "WAYBAR_LAYOUT_PATH=/y/b.jsonc", "WAYBAR_LAYOUT_NAME=b",
+             "WAYBAR_STYLE_PATH=/y/b.css"):
+    if got.count(want) != 1:
+        fail(f"concurrent layout overwritten by ensure_state_file(): {want} not once in {got}")
+
 sys.exit(1 if failures else 0)
