@@ -131,4 +131,12 @@ env -i \
 expect 0 "$?" "set_conf exit status"
 expect 'A="back\slash"' "$(grep '^A=' "$staterc")" "set_conf with a backslash in the value"
 
+# 10. waybar.py takes the same lock: Python and bash writers together
+if command -v python3 >/dev/null 2>&1; then
+    python3 "$TESTS_DIR/python/check_staterc_waybar.py" ||
+        fail "waybar.py writes staterc without the shared lock or in place"
+else
+    skip "python3 is not installed"
+fi
+
 finish
