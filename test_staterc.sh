@@ -115,6 +115,21 @@ if [ "$(id -u)" -ne 0 ]; then
     expect 0 "$(leftovers)" "temp files left after a failed write"
 fi
 
+# 12. a writer that can't get the lock in time warns on stderr and still writes
+reset_state $'A="1"\n'
+flock "$state_home/hyde/staterc.lock" sleep 4 &
+holder=$!
+sleep 0.5
+err=$(STATERC_LOCK_WAIT=1 set_state A 2 2>&1 >/dev/null)
+expect 0 "$?" "exit status after a lock timeout"
+case "$err" in
+*"writing without the lock"*) ;;
+*) fail "no warning on stderr after a lock timeout, got '$err'" ;;
+esac
+expect 'A="2"' "$(cat "$staterc")" "value written after a lock timeout"
+kill "$holder" 2>/dev/null
+wait "$holder" 2>/dev/null
+
 # 9. set_conf() goes through the helper: its old sed ate backslashes and
 # appended a third copy of a key that was already present twice
 reset_state $'A="1"\nB="2"\nA="3"\n'

@@ -157,4 +157,18 @@ wb.set_state_value("A", "2")
 if stat.S_IMODE(wb.STATE_FILE.stat().st_mode) != 0o600:
     fail(f"staterc mode changed to {oct(stat.S_IMODE(wb.STATE_FILE.stat().st_mode))}")
 
+# 7. a lock file that can't be opened (e.g. left root-owned by a sudo run)
+# must not stop the write: warn and write anyway, like staterc.sh does.
+reset("A=1\n")
+lock_path = wb.STATE_FILE.with_name("staterc.lock")
+lock_path.unlink(missing_ok=True)
+lock_path.mkdir()
+try:
+    wb.set_state_value("A", "2")
+except OSError as exc:
+    fail(f"set_state_value() raised when staterc.lock could not be opened: {exc!r}")
+if wb.STATE_FILE.read_text() != "A=2\n":
+    fail(f"value not written when staterc.lock could not be opened: {wb.STATE_FILE.read_text()!r}")
+lock_path.rmdir()
+
 sys.exit(1 if failures else 0)
