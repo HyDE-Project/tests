@@ -147,9 +147,12 @@ local function dsp_proxy(prefix)
     )
 end
 
+local last_dispatch
+
 _G.hl = {
     dsp = dsp_proxy(""),
-    dispatch = function()
+    dispatch = function(action)
+        last_dispatch = action
     end,
     get_active_window = function()
         return {fullscreen = 0, floating = false}
@@ -177,6 +180,19 @@ _G.hl.unbind = function(combo)
     end
 end
 
+-- Mirrors hyde/config.lua's hyde.config.exec: resolves the dotted path
+-- against hyde.config at *call* time, not here at stub-setup time. #2087's
+-- bug was binds that read hyde.config.app.* eagerly, before dynamic.lua
+-- merges the user's config.toml -- so the regression check below mutates
+-- hyde.config.app after binding and expects the dispatched command to follow.
+local function get_config(path)
+    local cur = _G.hyde.config
+    for part in path:gmatch("[^.]+") do
+        cur = cur[part]
+    end
+    return cur
+end
+
 _G.hyde = {
     config = {
         app = {
@@ -185,7 +201,12 @@ _G.hyde = {
             browser = "firefox",
             editor = "code"
         },
-        modifiers = {main = "SUPER"}
+        modifiers = {main = "SUPER"},
+        exec = function(path)
+            return function()
+                hl.dispatch(hl.dsp.exec_cmd(get_config(path)))
+            end
+        end
     }
 }
 
@@ -284,6 +305,45 @@ local required_defaults = {
 
 for _, combo in ipairs(required_defaults) do
     check(by_combo[canonical(combo)] ~= nil, string.format("documented combo %s is missing", combo))
+end
+
+-- Regression for #2087: key_binds.lua loads before dynamic.lua merges the
+-- user's config.toml, so a bind that captured hyde.config.app.* eagerly at
+-- bind time would run forever with the variables.lua default and silently
+-- ignore the user's chosen terminal/explorer/browser/editor. These binds
+-- must resolve hyde.config.app.* when pressed, not when registered.
+local app_binds = {
+    ["SUPER + T"] = "app.terminal",
+    ["SUPER + E"] = "app.explorer",
+    ["SUPER + B"] = "app.browser",
+    ["SUPER + C"] = "app.editor"
+}
+
+for combo, path in pairs(app_binds) do
+    local bind = by_combo[canonical(combo)]
+    check(bind ~= nil, string.format("app-launcher combo %s is missing", combo))
+    if bind then
+        check(
+            type(bind.action) == "function",
+            string.format("%s does not defer to keypress time, so it cannot see a later config.toml override", combo)
+        )
+        if type(bind.action) == "function" then
+            local parent, key = get_config(path:match("^(.*)%.")), path:match("%.([^.]+)$")
+            local original = parent[key]
+            parent[key] = "regression-marker-" .. key
+            bind.action()
+            check(
+                type(last_dispatch) == "table" and last_dispatch.args and last_dispatch.args[1] == parent[key],
+                string.format(
+                    "%s ran %q, expected it to pick up the config.toml override %q",
+                    combo,
+                    last_dispatch and last_dispatch.args and tostring(last_dispatch.args[1]) or "nil",
+                    parent[key]
+                )
+            )
+            parent[key] = original
+        end
+    end
 end
 
 local screenshot_commands = {
