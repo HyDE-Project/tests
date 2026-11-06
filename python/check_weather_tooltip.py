@@ -222,26 +222,61 @@ class Table(unittest.TestCase):
         self.assertEqual(w._width("晴れ"), 4)
         self.assertEqual(w._width("é"), 1)  # combining accent
 
-    def test_rare_events_have_no_commas_and_three_spaces_between(self):
-        # Fog/Frost get their own columns (see test_fog_and_frost_have_their_own_columns);
-        # Snow/Thunder are the ones still sharing the unlabeled rest column.
-        h = hour(chanceofsnow="57", chanceofthunder="3")
+    def test_rare_events_have_no_commas(self):
+        # Fog/Frost/Snow get their own columns (see test_fog_frost_and_snow_have_their_own_columns);
+        # Thunder is the only one still sharing the unlabeled rest column.
+        h = hour(chanceofthunder="3")
         rows, text = self.rows([day([h])])
-        self.assertIn("Snow 57%   Thunder 3%", rows[0])
+        self.assertIn("Thunder 3%", rows[0])
         self.assertNotIn(",", rows[0])
 
     def test_rare_event_junk_is_ignored(self):
-        rows, _ = self.rows([day([hour(chanceofsnow="nan")])])
-        self.assertNotIn("Snow", rows[0])
+        rows, _ = self.rows([day([hour(chanceofthunder="nan")])])
+        self.assertNotIn("Thunder", rows[0])
 
-    def test_fog_and_frost_have_their_own_columns(self):
-        _, text = self.rows([day([hour(chanceoffog="57", chanceoffrost="1")])])
+    def test_fog_frost_and_snow_have_their_own_columns(self):
+        # A slot with frost and snow together (common near freezing, HyDE-Project/HyDE
+        # weather tooltip report 2026-11-06) used to overflow the rare-events column
+        # and wrap onto its own line, breaking the table.
+        _, text = self.rows([day([hour(chanceoffog="57", chanceoffrost="1", chanceofsnow="10")])])
         lines = text.splitlines()
         head = next(ln for ln in lines if ln.startswith("Hour"))
         row = next(ln for ln in lines if "57%" in ln)
         self.assertIn("Fog", head)
         self.assertIn("Frost", head)
+        self.assertIn("Snow", head)
         self.assertEqual(head.index("Fog") + len("Fog"), row.index("57%") + len("57%"))
+        self.assertEqual(head.index("Snow") + len("Snow"), row.index("10%") + len("10%"))
+        self.assertNotIn("\n", row)
+
+    def test_a_region_without_winter_drops_frost_and_snow_columns(self):
+        # A maintainer asked what a tropical forecast looks like once Fog/Frost/Snow are
+        # fixed columns (HyDE-Project/HyDE#2224 review): a column that is 0% for every row
+        # of every requested day shouldn't permanently cost tooltip width.
+        days = [
+            day([hour(chanceofrain="20"), hour("1200", chanceofrain="80")]),
+            day([hour(chanceofrain="10")], "2026-10-01"),
+        ]
+        _, text = self.rows(days)
+        head = next(ln for ln in text.splitlines() if ln.startswith("Hour"))
+        self.assertIn("Rain", head)
+        self.assertNotIn("Fog", head)
+        self.assertNotIn("Frost", head)
+        self.assertNotIn("Snow", head)
+
+    def test_a_chance_column_stays_if_only_one_day_uses_it(self):
+        # Column drop decisions look at every requested day, not just one.
+        days = [day([hour(chanceoffrost="0")]), day([hour(chanceoffrost="4")], "2026-10-01")]
+        _, text = self.rows(days)
+        head = next(ln for ln in text.splitlines() if ln.startswith("Hour"))
+        self.assertIn("Frost", head)
+
+    def test_all_chance_columns_dropped_leaves_just_hour_temp_sky(self):
+        h = hour(chanceofovercast="0", chanceofrain="0", chanceofsunshine="0", chanceofwindy="0")
+        rows, text = self.rows([day([h])])
+        head = next(ln for ln in text.splitlines() if ln.startswith("Hour"))
+        self.assertEqual(head.split(), ["Hour", "Temp", "Sky"])
+        self.assertNotIn("%", rows[0])
 
     def test_no_trailing_whitespace_on_table_lines(self):
         _, text = self.rows([day([hour(), hour("1200", chanceoffog="9")])])
