@@ -196,6 +196,34 @@ listing() {
     : >"$work/empty"
     shell_listed "$target" "$work/empty" &&
         printf 'accepted a shell an empty file does not list\n'
+
+    # chsh checks /etc/shells by exact string, not resolved path (HyDE#2221):
+    # a candidate reachable only via a path equivalent to, but distinct from,
+    # the listed one (e.g. /usr/sbin/fish vs. the /usr/bin/fish entry on a
+    # usrmerge system) must still match, and the literal listed entry -- not
+    # the candidate -- must come back in shell_listed_match for chsh to use.
+    mkdir -p "$work/sbin" "$work/usrbin"
+    ln -s "$target" "$work/sbin/fish"
+    ln -s "$target" "$work/usrbin/fish"
+    printf '%s\n' "$work/usrbin/fish" >"$work/aliased"
+    shell_listed "$work/sbin/fish" "$work/aliased" ||
+        printf 'missed a shell reachable only via an equivalent but unlisted path\n'
+    [ "$shell_listed_match" = "$work/usrbin/fish" ] ||
+        printf "shell_listed_match was '%s', not the listed entry '%s'\n" "$shell_listed_match" "$work/usrbin/fish"
+
+    # A restricted alias (e.g. rzsh for zsh) is the same binary as the plain
+    # shell, so it resolves to the same realpath -- but it must never be
+    # picked for the plain shell just because it is listed first
+    # (CodeRabbit on #2225).
+    ln -s "$target" "$work/bin/rfish"
+    {
+        printf '%s\n' "$work/bin/rfish"
+        printf '%s\n' "$work/bin/fish"
+    } >"$work/restricted-first"
+    shell_listed "$target" "$work/restricted-first" ||
+        printf 'missed a plain shell listed after its restricted alias\n'
+    [ "$shell_listed_match" = "$work/bin/fish" ] ||
+        printf "shell_listed_match picked '%s' over the plain shell '%s'\n" "$shell_listed_match" "$work/bin/fish"
     return 0
 }
 
