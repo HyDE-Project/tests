@@ -57,6 +57,26 @@ if [ -z "$export_line" ] || [ -z "$systemd_line" ] || [ "$export_line" -ge "$sys
     fail "scoped debug defaults are not exported before the execution-path branch"
 fi
 
+# Without systemd, restart_waybar() still hot-reloads via SIGUSR2, which kills
+# the process group of any on-click command (HyDE#2216/#2217). The wrapper
+# must take the command out of that group with `setsid -f`, but still wait
+# for it and relay its exit status with `-w` (HyDE#2218) -- callers such as
+# hyprlock.sh's `--test` path run this synchronously and clean up right after
+# it returns, which raced the detached command without `-w`.
+# `/run/systemd/system` can't be faked on a systemd test runner, so this
+# checks the source instead of exercising the branch.
+final_exec_line=$(grep -n '^exec ' "$wrapper" | tail -1 | cut -d: -f1)
+final_exec=$(sed -n "${final_exec_line}p" "$wrapper")
+
+case "$final_exec" in
+exec\ setsid\ -f\ -w\ \"\$@\") ;;
+*) fail "non-systemd fallback does not detach+wait with 'setsid -f -w': $final_exec" ;;
+esac
+
+if [ -n "$systemd_line" ] && [ -n "$final_exec_line" ] && [ "$final_exec_line" -le "$systemd_line" ]; then
+    fail "the setsid-detached exec must be the non-systemd fallback, after the systemd branch"
+fi
+
 override_output=$(
     export DEBUG=release
     export APP2UNIT_DEBUG=1
