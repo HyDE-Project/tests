@@ -163,17 +163,36 @@ _G.hl = {
     }
 }
 
+-- Hyprland 0.57 returns a handle from hl.bind() and the keybind hint replays a
+-- bind through handle.arg, so the stub answers the same way: a registry
+-- reference plus is_enabled().
+local bind_ref = 100
+
 _G.hl.bind = function(combo, action, opts)
-    binds[#binds + 1] = {combo = combo, action = action, opts = opts}
+    bind_ref = bind_ref + 1
+    local handle = {arg = tostring(bind_ref), combo = combo, action = action}
+    handle.enabled = true
+    function handle:is_enabled()
+        return self.enabled
+    end
+    binds[#binds + 1] = {combo = combo, action = action, opts = opts, handle = handle}
+    return handle
 end
 
 _G.hl.gesture = function(spec)
     gestures[#gestures + 1] = spec
 end
 
-_G.hl.unbind = function(combo)
+_G.hl.unbind = function(target)
+    if type(target) == "table" then
+        target.enabled = nil
+        return
+    end
     for index = #binds, 1, -1 do
-        if binds[index].combo == combo then
+        if binds[index].combo == target then
+            if binds[index].handle then
+                binds[index].handle.enabled = nil
+            end
             table.remove(binds, index)
             return
         end
