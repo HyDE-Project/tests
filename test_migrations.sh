@@ -35,6 +35,22 @@ printf '#!/usr/bin/env sh\nprintf "%%s\\n" "ran" >>"%s"\nexit 1\n' "$failure_log
     >"$migration_dir/v26.11.0.sh"
 chmod +x "$migration_dir"/*.sh
 
+# A dry run (install.sh -t) lists what is pending and changes nothing: running
+# a migration edits the user's files, and recording it would make the next
+# real run skip it.
+dry_output=$(flg_DryRun=1 run_pending_migrations "$migration_dir" "$state_file" 2>&1)
+[ -s "$order_log" ] &&
+    fail "a dry run executed migrations: $(tr '\n' ' ' <"$order_log")"
+[ -e "$failure_log" ] && fail "a dry run executed a migration"
+[ -e "$state_file" ] && fail "a dry run wrote the migration state file"
+[ -e "$(dirname "$state_file")" ] && fail "a dry run created the migration state directory"
+for version in v25.9.1 v26.4.3 v26.10.1 v26.11.0; do
+    case $dry_output in
+    *"$version.sh"*) ;;
+    *) fail "a dry run did not list pending migration $version.sh" ;;
+    esac
+done
+
 run_pending_migrations "$migration_dir" "$state_file" >/dev/null 2>&1
 
 expected_order='v25.9.1
@@ -61,6 +77,15 @@ run_pending_migrations "$migration_dir" "$state_file" >/dev/null 2>&1
 failure_runs=$(wc -l <"$failure_log" 2>/dev/null || echo 0)
 [ "$failure_runs" -eq 2 ] ||
     fail "a failed migration ran $failure_runs time(s) across two passes, expected 2"
+
+dry_after=$(flg_DryRun=1 run_pending_migrations "$migration_dir" "$state_file" 2>&1)
+case $dry_after in
+*v25.9.1.sh* | *v26.10.1.sh*) fail "a dry run listed an applied migration as pending" ;;
+esac
+case $dry_after in
+*v26.11.0.sh*) ;;
+*) fail "a dry run did not list the still-pending failed migration" ;;
+esac
 
 second_pass=$(run_pending_migrations "$migration_dir" "$state_file" 2>&1 || true)
 case $second_pass in

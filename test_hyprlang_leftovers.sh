@@ -130,6 +130,145 @@ run_migration
 [ -e "$config_home/hypr/hyprland.conf" ] || [ -L "$config_home/hypr/hyprland.conf" ] &&
     fail "a dangling symlink at a retired path was left behind"
 
+# A leftover that comes back after the migration already kept a copy of it.
+# The runner only records a migration as applied when it exits 0, so one that
+# keeps failing re-runs on every restore. nwg-displays creates an empty
+# hypr/monitors.conf each time it starts; a copy identical to the backup is
+# removed, anything else still stays put and fails the run.
+recreated_case() {
+    # $1 = expected: removed|kept; $2 = description; the caller has already
+    # created config/hypr/monitors.conf and its backup after a first run.
+    run_migration
+    local status=$?
+    local src="$config_home/hypr/monitors.conf"
+    case "$1" in
+    removed)
+        [ "$status" -eq 0 ] || fail "$2: the migration failed: $(cat "$work_dir/out.log")"
+        { [ -e "$src" ] || [ -L "$src" ]; } && fail "$2: the leftover was left in place"
+        grep -q 'identical to its backup' "$work_dir/out.log" || fail "$2: the removal was not reported"
+        ;;
+    kept)
+        [ "$status" -ne 0 ] || fail "$2: the migration reported success"
+        { [ -e "$src" ] || [ -L "$src" ]; } || fail "$2: the leftover was removed although it differs from the backup"
+        grep -q 'a backup already exists' "$work_dir/out.log" || fail "$2: the skipped leftover was not reported"
+        ;;
+    esac
+}
+backed_up="$backup/config/hypr/monitors.conf"
+
+# Seeds a finished first run whose monitors.conf backup is empty, the case
+# nwg-displays produces.
+seed_recreated() {
+    seed
+    : >"$config_home/hypr/monitors.conf"
+    run_migration
+    [ -f "$backed_up" ] || fail "setup: the first run kept no copy of monitors.conf"
+}
+
+seed_recreated
+: >"$config_home/hypr/monitors.conf"
+recreated_case removed "an empty monitors.conf recreated after the first run (nwg-displays)"
+[ -f "$backed_up" ] && [ ! -s "$backed_up" ] || fail "the backup was changed while removing its duplicate"
+run_migration
+[ "$?" -eq 0 ] || fail "a further run after removing the duplicate failed"
+
+seed
+printf 'monitor = eDP-1, preferred, auto, 1\n' >"$config_home/hypr/monitors.conf"
+run_migration
+printf 'monitor = eDP-1, preferred, auto, 1\n' >"$config_home/hypr/monitors.conf"
+recreated_case removed "a recreated leftover with the same content"
+
+seed_recreated
+printf 'monitor = eDP-1, preferred, auto, 1.5\n' >"$config_home/hypr/monitors.conf"
+recreated_case kept "a recreated leftover that differs from the backup"
+[ ! -s "$backed_up" ] || fail "the backup was overwritten by a different leftover"
+
+seed
+printf 'monitor = eDP-1, preferred, auto, 1\n' >"$config_home/hypr/monitors.conf"
+run_migration
+: >"$config_home/hypr/monitors.conf"
+recreated_case kept "an empty leftover against a backup with settings in it"
+grep -q 'eDP-1' "$backed_up" || fail "the backup with settings was lost"
+
+seed
+rm -f "$config_home/hypr/monitors.conf"
+ln -s "$work_dir/monitors-target.conf" "$config_home/hypr/monitors.conf"
+run_migration
+ln -s "$work_dir/monitors-target.conf" "$config_home/hypr/monitors.conf"
+recreated_case removed "a recreated symlink with the same (dangling) target"
+
+seed
+rm -f "$config_home/hypr/monitors.conf"
+ln -s "$work_dir/monitors-a.conf" "$config_home/hypr/monitors.conf"
+run_migration
+ln -s "$work_dir/monitors-b.conf" "$config_home/hypr/monitors.conf"
+recreated_case kept "a recreated symlink with a different target"
+
+# Targets that differ only by a trailing newline are different targets: a
+# plain $(readlink) would strip it and remove a link that isn't backed up.
+seed
+rm -f "$config_home/hypr/monitors.conf"
+ln -s "$work_dir/monitors-nl.conf" "$config_home/hypr/monitors.conf"
+run_migration
+ln -s "$work_dir/monitors-nl.conf"$'\n' "$config_home/hypr/monitors.conf"
+recreated_case kept "a recreated symlink whose target has an extra trailing newline"
+# readlink prints the target plus its own newline; the x keeps both.
+[ "$(readlink "$backed_up" && printf x)" = "$work_dir/monitors-nl.conf"$'\n'x ] ||
+    fail "the backed-up link was changed while comparing trailing newlines"
+
+seed
+rm -f "$config_home/hypr/monitors.conf"
+ln -s "$work_dir/monitors-nl.conf"$'\n' "$config_home/hypr/monitors.conf"
+run_migration
+ln -s "$work_dir/monitors-nl.conf" "$config_home/hypr/monitors.conf"
+recreated_case kept "a recreated symlink missing the backup target's trailing newline"
+
+seed
+rm -f "$config_home/hypr/monitors.conf"
+ln -s "$work_dir/monitors-nl.conf"$'\n' "$config_home/hypr/monitors.conf"
+run_migration
+ln -s "$work_dir/monitors-nl.conf"$'\n' "$config_home/hypr/monitors.conf"
+recreated_case removed "a recreated symlink with the same target, trailing newline included"
+
+seed_recreated
+: >"$work_dir/empty-target.conf"
+ln -s "$work_dir/empty-target.conf" "$config_home/hypr/monitors.conf"
+recreated_case kept "a symlink to identical content where the backup is a file"
+
+seed_recreated
+mkdir -p "$config_home/hypr/monitors.conf"
+recreated_case kept "a directory where the backup is a file"
+
+seed
+mkdir -p "$config_home/hypr/animations"
+run_migration
+mkdir -p "$config_home/hypr/animations"
+printf 'old animation\n' >"$config_home/hypr/animations/theme.conf"
+run_migration
+[ "$?" -ne 0 ] || fail "a recreated directory identical to its backup counted as success"
+[ -d "$config_home/hypr/animations" ] || fail "a recreated directory was removed; directories are never deduplicated"
+
+if [ "$(id -u)" -eq 0 ]; then
+    skip "an unreadable leftover cannot be simulated for the superuser"
+else
+    # Identical bytes, but cmp can't open it: treated as different, kept.
+    seed_recreated
+    : >"$config_home/hypr/monitors.conf"
+    chmod 000 "$config_home/hypr/monitors.conf"
+    recreated_case kept "an unreadable leftover"
+    chmod 644 "$config_home/hypr/monitors.conf"
+fi
+
+# Several at once: the identical one goes, the different one stays and the
+# run still fails, so nothing is recorded as applied too early.
+seed_recreated
+: >"$config_home/hypr/monitors.conf"
+printf 'changed\n' >"$config_home/hypr/userprefs.conf"
+run_migration
+[ "$?" -ne 0 ] || fail "a mixed rerun reported success although one leftover differs"
+[ -e "$config_home/hypr/monitors.conf" ] && fail "the identical leftover in a mixed rerun was left in place"
+[ -f "$config_home/hypr/userprefs.conf" ] || fail "the different leftover in a mixed rerun was removed"
+
 theme_migration="$REPO_ROOT/Scripts/migrations/v26.8.3.sh"
 
 if [ ! -f "$theme_migration" ]; then
